@@ -1,5 +1,5 @@
 use core::panic;
-use etherparse::PacketHeaders;
+use etherparse::{Icmpv4Type, PacketHeaders, ReadError, TransportHeader};
 use libc::{self, c_void, read};
 use pnet::{
     packet::{
@@ -53,9 +53,18 @@ async fn main() -> std::io::Result<()> {
 
     unsafe { read(sd, buf_point, 200) };
 
-    match PacketHeaders::from_ip_slice(&res) {
-        Err(e) => println!("{:?}", e),
-        Ok(val) => println!("{:?}", val.transport),
+    let res_protocol: Result<Option<TransportHeader>, ReadError> =
+        match PacketHeaders::from_ip_slice(&res) {
+            Ok(v) => Ok(v.transport),
+            Err(e) => Err(e),
+        };
+
+    if let Some(v) = res_protocol.unwrap().unwrap().icmpv4() {
+        match v.icmp_type {
+            Icmpv4Type::EchoReply(_) => println!("Host available"),
+            Icmpv4Type::DestinationUnreachable(_) => println!("Destination Unreachable"),
+            _ => println!("Unexpected"),
+        }
     }
 
     Ok(())
