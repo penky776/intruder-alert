@@ -13,9 +13,30 @@ use pnet::{
 };
 use rayon;
 use std::{
-    io::Error,
-    net::{IpAddr, Ipv4Addr},
+    fmt::{self},
+    net::Ipv4Addr,
 };
+
+enum IntruderError {
+    UnableToRead,
+    NotFound,
+}
+
+impl fmt::Display for IntruderError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IntruderError::UnableToRead => write!(f, "Unable to read packet"),
+            IntruderError::NotFound => write!(f, "Icmp Echo Reply not found"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IcmpEchoReply {
+    received: bool,
+    src: Ipv4Addr,
+    dst: Ipv4Addr,
+}
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -26,7 +47,7 @@ async fn main() -> std::io::Result<()> {
         .build()
         .unwrap();
 
-    for i in 0..=255 {
+    for i in 1..=255 {
         pool.install(|| {
             let (mut tx, rx) = match transport_channel(4096, protocol) {
                 Ok((tx, rx)) => (tx, rx),
@@ -37,16 +58,16 @@ async fn main() -> std::io::Result<()> {
             };
             let mut buffer = [0u8; 16];
             let icmp_req_packet = create_packet(&mut buffer);
-            let ip_address = IpAddr::V4(Ipv4Addr::new(192, 168, 100, i));
-            match tx.send_to(icmp_req_packet, ip_address) {
+            let ip_address = Ipv4Addr::new(192, 168, 100, i);
+            match tx.send_to(icmp_req_packet, std::net::IpAddr::V4(ip_address)) {
                 Ok(n) => n,
                 Err(e) => panic!("failed to send packet: {}", e),
             };
 
             let sd = rx.socket.fd;
 
-            match read_from_res(sd) {
-                Ok(s) => println!("{}: {}", ip_address, s),
+            match read_from_res(sd, ip_address) {
+                Ok(s) => println!("{:?}", s),
                 Err(e) => println!("{}: {}", ip_address, e.to_string()),
             };
         });
@@ -55,7 +76,7 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn read_from_res(sd: i32) -> Result<String, Error> {
+fn read_from_res(sd: i32, ip_address: Ipv4Addr) -> Result<IcmpEchoReply, IntruderError> {
     let mut res = [0u8; 200]; // the response packet
     let buf_point: *mut c_void = res.as_mut_ptr() as *mut c_void;
 
@@ -67,14 +88,36 @@ fn read_from_res(sd: i32) -> Result<String, Error> {
             Err(e) => Err(e),
         };
 
-    if let Some(v) = res_protocol.unwrap().unwrap().icmpv4() {
-        match v.icmp_type {
-            Icmpv4Type::EchoReply(_) => Ok(String::from("Echo Reply received")),
-            Icmpv4Type::DestinationUnreachable(_) => Ok(String::from("Destination unreachable")),
-            _ => Ok(String::from("Unexpected")),
+    let src_ip = match etherparse::Ipv4HeaderSlice::from_slice(&res) {
+        Ok(iph) => Ok(iph.source_addr()),
+        Err(e) => Err(e),
+    };
+
+    let dst_ip = match etherparse::Ipv4HeaderSlice::from_slice(&res) {
+        Ok(iph) => Ok(iph.destination_addr()),
+        Err(e) => Err(e),
+    };
+
+    let mut icmp_reply = IcmpEchoReply {
+        received: false,
+        src: src_ip.unwrap(),
+        dst: dst_ip.unwrap(),
+    };
+
+    if icmp_reply.src == ip_address {
+        if let Some(v) = res_protocol.unwrap().unwrap().icmpv4() {
+            match v.icmp_type {
+                Icmpv4Type::EchoReply(_) => {
+                    icmp_reply.received = true;
+                    Ok(icmp_reply)
+                }
+                _ => Ok(icmp_reply), // redundant
+            }
+        } else {
+            return Err(IntruderError::UnableToRead);
         }
     } else {
-        return Ok(String::from("Unexpected"));
+        return Err(IntruderError::NotFound);
     }
 }
 

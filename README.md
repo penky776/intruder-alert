@@ -1,0 +1,1 @@
+network scanning. ping needs to be enabled on the router, and the endpoint devices connected to the network need to be able to respond to echo requests
