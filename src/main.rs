@@ -14,9 +14,12 @@ use pnet::{
 use rayon;
 use std::{
     fmt,
+    io::{stdin, stdout, Write},
     net::Ipv4Addr,
     sync::{Arc, Mutex},
 };
+use termion::{cursor::DetectCursorPos, raw::IntoRawMode};
+use termion::{event::Key, input::TermRead};
 
 enum IntruderError {
     UnableToRead,
@@ -83,7 +86,7 @@ async fn main() {
                             match clients.contains(&ip_address) {
                                 true => (),
                                 false => {
-                                    confirm_ip(); // confirm if ip is intruder or not
+                                    confirm_ip(s.src); // confirm if ip is intruder or not
                                     clients.push(ip_address)
                                 }
                             }
@@ -94,6 +97,8 @@ async fn main() {
                 };
             });
         }
+
+        println!("{:?}", clients); // debug
 
         std::thread::sleep(ten_mins);
     }
@@ -154,5 +159,30 @@ fn create_packet(buffer: &mut [u8; 16]) -> MutableEchoRequestPacket {
     icmp_req_packet
 }
 
-// TODO
-fn confirm_ip() {}
+fn confirm_ip(ip_address: Ipv4Addr) {
+    let stdin = stdin();
+    let mut stdout = stdout().into_raw_mode().unwrap();
+
+    write!(
+        stdout,
+        "Press 'y' to confirm the ip address {}{}",
+        ip_address,
+        termion::cursor::Hide
+    )
+    .unwrap();
+    stdout.flush().unwrap();
+
+    let y_coordinate = stdout.cursor_pos().unwrap().1;
+
+    for c in stdin.keys() {
+        write!(stdout, "\n {}", termion::cursor::Goto(1, y_coordinate + 1)).unwrap();
+
+        match c.unwrap() {
+            Key::Char('y') => break,
+            _ => {}
+        }
+        stdout.flush().unwrap();
+    }
+
+    write!(stdout, "{}", termion::cursor::Show).unwrap();
+}

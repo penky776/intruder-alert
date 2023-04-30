@@ -11,3 +11,4 @@ libc = "0.2.140"
 etherparse = "0.13.0"
 rayon = "1.7.0"
 tokio = { version = "1", features = ["full"] }
+termion = "2.0.1"
