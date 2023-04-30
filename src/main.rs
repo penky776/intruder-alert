@@ -1,4 +1,4 @@
-use core::panic;
+use core::{panic, time};
 use etherparse::{Icmpv4Type, PacketHeaders, ReadError, TransportHeader};
 use libc::{self, c_void, read};
 use pnet::{
@@ -13,8 +13,9 @@ use pnet::{
 };
 use rayon;
 use std::{
-    fmt::{self},
+    fmt,
     net::Ipv4Addr,
+    sync::{Arc, Mutex},
 };
 
 enum IntruderError {
@@ -39,41 +40,63 @@ struct IcmpEchoReply {
 }
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() {
     let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
+
+    let clients: Arc<std::sync::Mutex<Box<Vec<Ipv4Addr>>>> =
+        Arc::new(Mutex::new(Box::new(Vec::new()))); // devices connected to the network
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(255)
         .build()
         .unwrap();
 
-    for i in 1..=255 {
-        pool.install(|| {
-            let (mut tx, rx) = match transport_channel(4096, protocol) {
-                Ok((tx, rx)) => (tx, rx),
-                Err(e) => panic!(
-                    "An error occurred when creating the transport channel: {}",
-                    e
-                ),
-            };
-            let mut buffer = [0u8; 16];
-            let icmp_req_packet = create_packet(&mut buffer);
-            let ip_address = Ipv4Addr::new(192, 168, 100, i);
-            match tx.send_to(icmp_req_packet, std::net::IpAddr::V4(ip_address)) {
-                Ok(n) => n,
-                Err(e) => panic!("failed to send packet: {}", e),
-            };
+    let ten_mins = time::Duration::from_secs(600); // ten mins = 600 seconds
 
-            let sd = rx.socket.fd;
+    // send icmp requests every ten minutes
+    loop {
+        for i in 1..=255 {
+            let clients = Arc::clone(&clients);
+            pool.install(|| {
+                let (mut tx, rx) = match transport_channel(4096, protocol) {
+                    Ok((tx, rx)) => (tx, rx),
+                    Err(e) => panic!(
+                        "An error occurred when creating the transport channel: {}",
+                        e
+                    ),
+                };
+                let mut buffer = [0u8; 16];
+                let icmp_req_packet = create_packet(&mut buffer);
+                let ip_address = Ipv4Addr::new(192, 168, 100, i);
+                match tx.send_to(icmp_req_packet, std::net::IpAddr::V4(ip_address)) {
+                    Ok(n) => n,
+                    Err(e) => panic!("failed to send packet: {}", e),
+                };
 
-            match read_from_res(sd, ip_address) {
-                Ok(s) => println!("{:?}", s),
-                Err(e) => println!("{}: {}", ip_address, e.to_string()),
-            };
-        });
+                let sd = rx.socket.fd;
+
+                let mut clients = clients.lock().unwrap();
+
+                match read_from_res(sd, ip_address) {
+                    Ok(s) => {
+                        if s.received {
+                            match clients.contains(&ip_address) {
+                                true => (),
+                                false => {
+                                    confirm_ip(); // confirm if ip is intruder or not
+                                    clients.push(ip_address)
+                                }
+                            }
+                        }
+                        println!("{:?}", s);
+                    }
+                    Err(e) => println!("{}: {}", ip_address, e.to_string()),
+                };
+            });
+        }
+
+        std::thread::sleep(ten_mins);
     }
-
-    Ok(())
 }
 
 fn read_from_res(sd: i32, ip_address: Ipv4Addr) -> Result<IcmpEchoReply, IntruderError> {
@@ -130,3 +153,6 @@ fn create_packet(buffer: &mut [u8; 16]) -> MutableEchoRequestPacket {
     icmp_req_packet.set_checksum(59371);
     icmp_req_packet
 }
+
+// TODO
+fn confirm_ip() {}
