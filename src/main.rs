@@ -58,7 +58,7 @@ async fn main() {
 
     // send icmp requests every ten minutes
     loop {
-        for i in 1..=255 {
+        for i in 1..255 {
             let clients = Arc::clone(&clients);
             pool.install(|| {
                 let (mut tx, rx) = match transport_channel(4096, protocol) {
@@ -98,7 +98,7 @@ async fn main() {
             });
         }
 
-        println!("{:?}", clients); // debug
+        println!("hosts detected: {:?}", clients.lock().unwrap()); // debug
 
         std::thread::sleep(ten_mins);
     }
@@ -165,7 +165,7 @@ fn confirm_ip(ip_address: Ipv4Addr) {
 
     write!(
         stdout,
-        "Press 'y' to confirm the ip address {}{}",
+        "Press 'c' to confirm the ip address {}{}",
         ip_address,
         termion::cursor::Hide
     )
@@ -178,7 +178,7 @@ fn confirm_ip(ip_address: Ipv4Addr) {
         write!(stdout, "\n {}", termion::cursor::Goto(1, y_coordinate + 1)).unwrap();
 
         match c.unwrap() {
-            Key::Char('y') => break,
+            Key::Char('c') => break,
             _ => {}
         }
         stdout.flush().unwrap();
