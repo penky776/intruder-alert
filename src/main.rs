@@ -14,8 +14,9 @@ use pnet::{
 use rayon;
 use std::{
     fmt,
-    io::{stdin, stdout, Write},
+    io::{self, stdin, stdout, Write},
     net::Ipv4Addr,
+    process::Command,
     sync::{Arc, Mutex},
 };
 use termion::{cursor::DetectCursorPos, raw::IntoRawMode};
@@ -86,7 +87,18 @@ async fn main() {
                             match clients.contains(&ip_address) {
                                 true => (),
                                 false => {
-                                    confirm_ip(s.src); // confirm if ip is intruder or not
+                                    let output = Command::new("sudo")
+                                        .arg("-u")
+                                        .arg("[NON-PRIVILEGED-USER]") // add non-privileged user
+                                        .arg("cargo")
+                                        .arg("run")
+                                        .arg("--bin")
+                                        .arg("alert")
+                                        .output()
+                                        .expect("alert.rs failed to run");
+                                    io::stdout().write_all(&output.stdout).unwrap(); // intruder alert
+
+                                    confirm_ip(s.src);
                                     clients.push(ip_address)
                                 }
                             }
