@@ -9,7 +9,11 @@ use pnet::{
         },
         ip::IpNextHeaderProtocols,
     },
-    transport::{transport_channel, TransportChannelType::Layer4, TransportProtocol::Ipv4},
+    transport::{
+        transport_channel,
+        TransportChannelType::{self, Layer4},
+        TransportProtocol::Ipv4,
+    },
 };
 use rayon;
 use std::{
@@ -60,54 +64,13 @@ async fn main() {
     // send icmp requests every ten minutes
     loop {
         for i in 1..255 {
+            let i = Arc::new(Mutex::new(i));
             let clients = Arc::clone(&clients);
-            pool.install(|| {
-                let (mut tx, rx) = match transport_channel(4096, protocol) {
-                    Ok((tx, rx)) => (tx, rx),
-                    Err(e) => panic!(
-                        "An error occurred when creating the transport channel: {}",
-                        e
-                    ),
-                };
-                let mut buffer = [0u8; 16];
-                let icmp_req_packet = create_packet(&mut buffer);
-                let ip_address = Ipv4Addr::new(192, 168, 100, i);
-                match tx.send_to(icmp_req_packet, std::net::IpAddr::V4(ip_address)) {
-                    Ok(n) => n,
-                    Err(e) => panic!("failed to send packet: {}", e),
-                };
 
-                let sd = rx.socket.fd;
+            let protocol = Arc::new(Mutex::new(protocol.clone()));
 
-                let mut clients = clients.lock().unwrap();
-
-                match read_from_res(sd, ip_address) {
-                    Ok(s) => {
-                        if s.received {
-                            match clients.contains(&ip_address) {
-                                true => (),
-                                false => {
-                                    let output = Command::new("sudo")
-                                        .arg("-u")
-                                        .arg("[NON-PRIVILEGED-USER]") // add non-privileged user
-                                        .arg("cargo")
-                                        .arg("run")
-                                        .arg("--bin")
-                                        .arg("alert")
-                                        .output()
-                                        .expect("alert.rs failed to run");
-                                    io::stdout().write_all(&output.stdout).unwrap(); // intruder alert
-
-                                    confirm_ip(s.src);
-                                    clients.push(ip_address)
-                                }
-                            }
-                        }
-                        println!("{:?}", s);
-                    }
-                    Err(e) => println!("{}: {}", ip_address, e.to_string()),
-                };
-            });
+            pool.install(|| transport_package(protocol, clients, i))
+                .await;
         }
 
         println!("hosts detected: {:?}", clients.lock().unwrap()); // debug
@@ -116,7 +79,74 @@ async fn main() {
     }
 }
 
-fn read_from_res(sd: i32, ip_address: Ipv4Addr) -> Result<IcmpEchoReply, IntruderError> {
+async fn transport_package(
+    protocol: Arc<std::sync::Mutex<TransportChannelType>>,
+    clients: Arc<Mutex<Box<Vec<Ipv4Addr>>>>,
+    i: Arc<std::sync::Mutex<u8>>,
+) {
+    let protocol = *protocol.lock().unwrap();
+
+    let (mut tx, rx) = match transport_channel(4096, protocol) {
+        Ok((tx, rx)) => (tx, rx),
+        Err(e) => panic!(
+            "An error occurred when creating the transport channel: {}",
+            e
+        ),
+    };
+    let mut buffer = [0u8; 16];
+
+    let icmp_req_packet = create_packet(&mut buffer);
+
+    let i = *i.lock().unwrap();
+    let ip_address_original = Arc::new(Mutex::new(Ipv4Addr::new(192, 168, 100, i)));
+    let ip_address = *ip_address_original.clone().lock().unwrap();
+
+    match tx.send_to(icmp_req_packet, std::net::IpAddr::V4(ip_address)) {
+        Ok(n) => n,
+        Err(e) => panic!("failed to send packet: {}", e),
+    };
+
+    let sd_original = Arc::new(Mutex::new(rx.socket.fd));
+
+    let reply_to_icmp_request = read_from_res(sd_original, ip_address_original).await;
+
+    let mut clients = clients.lock().unwrap();
+
+    match reply_to_icmp_request {
+        Ok(s) => {
+            if s.received {
+                match clients.contains(&ip_address) {
+                    true => (),
+                    false => {
+                        let output = Command::new("sudo")
+                            .arg("-u")
+                            .arg("[NON-PRIVILEGED-USER]") // add non-privileged user
+                            .arg("cargo")
+                            .arg("run")
+                            .arg("--bin")
+                            .arg("alert")
+                            .output()
+                            .expect("alert.rs failed to run");
+                        io::stdout().write_all(&output.stdout).unwrap(); // intruder alert
+
+                        confirm_ip(s.src);
+                        clients.push(ip_address)
+                    }
+                }
+            }
+            println!("{:?}", s);
+        }
+        Err(e) => println!("{}: {}", ip_address, e.to_string()),
+    };
+}
+
+async fn read_from_res(
+    sd: Arc<Mutex<i32>>,
+    ip_address: Arc<Mutex<Ipv4Addr>>,
+) -> Result<IcmpEchoReply, IntruderError> {
+    let sd = *sd.lock().unwrap();
+    let ip_address = *ip_address.lock().unwrap();
+
     let mut res = [0u8; 200]; // the response packet
     let buf_point: *mut c_void = res.as_mut_ptr() as *mut c_void;
 
