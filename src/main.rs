@@ -15,7 +15,6 @@ use pnet::{
         TransportProtocol::Ipv4,
     },
 };
-use rayon;
 use std::{
     fmt,
     io::{self, stdin, stdout, Write},
@@ -54,11 +53,6 @@ async fn main() {
     let clients: Arc<std::sync::Mutex<Box<Vec<Ipv4Addr>>>> =
         Arc::new(Mutex::new(Box::new(Vec::new()))); // devices connected to the network
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(255)
-        .build()
-        .unwrap();
-
     let ten_mins = time::Duration::from_secs(600); // ten mins = 600 seconds
 
     // send icmp requests every ten minutes
@@ -69,11 +63,8 @@ async fn main() {
 
             let protocol = Arc::new(Mutex::new(protocol.clone()));
 
-            pool.install(|| transport_package(protocol, clients, i))
-                .await;
+            tokio::spawn(async move { transport_package(protocol, clients, i).await });
         }
-
-        println!("hosts detected: {:?}", clients.lock().unwrap()); // debug
 
         std::thread::sleep(ten_mins);
     }
@@ -120,7 +111,7 @@ async fn transport_package(
                     false => {
                         let output = Command::new("sudo")
                             .arg("-u")
-                            .arg("[NON-PRIVILEGED-USER]") // add non-privileged user
+                            .arg("[Non-privileged-user]") // add non-privileged user
                             .arg("cargo")
                             .arg("run")
                             .arg("--bin")
