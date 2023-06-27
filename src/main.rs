@@ -1,5 +1,6 @@
 use core::{panic, time};
 use etherparse::{Icmpv4Type, PacketHeaders, ReadError, TransportHeader};
+use futures::future::try_join_all;
 use libc::{self, c_void, read};
 use pnet::{
     packet::{
@@ -20,7 +21,7 @@ use std::{
     io::{self, stdin, stdout, Write},
     net::Ipv4Addr,
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 use termion::{cursor::DetectCursorPos, raw::IntoRawMode};
 use termion::{event::Key, input::TermRead};
@@ -57,16 +58,25 @@ async fn main() {
 
     // send icmp requests every ten minutes
     loop {
+        let mut tpfutures = Vec::new();
         for i in 1..255 {
             let i = Arc::new(Mutex::new(i));
             let clients = Arc::clone(&clients);
 
             let protocol = Arc::new(Mutex::new(protocol.clone()));
 
-            tokio::spawn(async move { transport_package(protocol, clients, i).await });
+            tpfutures.push(tokio::spawn(transport_package(protocol, clients, i)))
         }
 
-        std::thread::sleep(ten_mins);
+        // wait for all the threads to finish execution and print the hosts detected afterward.
+
+        match try_join_all(tpfutures).await {
+            Ok(_) => {
+                println!("hosts detected: {:?}", clients.lock().unwrap());
+                std::thread::sleep(ten_mins)
+            }
+            Err(_) => eprintln!("Something went wrong..."),
+        }
     }
 }
 
@@ -101,8 +111,17 @@ async fn transport_package(
 
     let reply_to_icmp_request = read_from_res(sd_original, ip_address_original).await;
 
-    let mut clients = clients.lock().unwrap();
+    let clients = clients.lock().unwrap();
 
+    intruder_alert(reply_to_icmp_request, clients, ip_address)
+}
+
+// run alert.rs
+fn intruder_alert(
+    reply_to_icmp_request: Result<IcmpEchoReply, IntruderError>,
+    mut clients: MutexGuard<'_, Box<Vec<Ipv4Addr>>>,
+    ip_address: Ipv4Addr,
+) {
     match reply_to_icmp_request {
         Ok(s) => {
             if s.received {
