@@ -1,1 +1,3 @@
-network scanning. ping needs to be enabled on the router, and the endpoint devices connected to the network need to be able to respond to echo requests
+<h1>network scanning (ping sweep)</h1>
+
+In line 133 of main.rs, replace "[non-privileged-user]" with your local username.
